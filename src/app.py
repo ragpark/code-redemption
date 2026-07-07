@@ -6,25 +6,22 @@ Endpoints
 GET  /            Upload UI (HTML form)
 GET  /healthz     Liveness probe (Railway healthcheck)
 GET  /version     Package version + Git SHA (from Railway env)
-POST /run         Multipart upload -> zipped output pack
+POST /run         Multipart upload -> joined output CSV
 
 British English throughout.
 """
 from __future__ import annotations
 
-import io
 import logging
 import os
-import shutil
 import tempfile
-import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
 
-from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
+from fastapi import FastAPI, File, HTTPException, Request, UploadFile
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
+from starlette.background import BackgroundTask
 
 from src import als2ah_codegen
 
@@ -34,7 +31,6 @@ from src import als2ah_codegen
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "25"))
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
-ALLOW_UK_DEFAULT = os.environ.get("ALLOW_UK_DEFAULT", "false").lower() == "true"
 
 logging.basicConfig(
     level=logging.INFO,
@@ -48,9 +44,9 @@ templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 app = FastAPI(
     title="ALS -> ActiveHub Code Generation Utility",
     description=(
-        "Prepares a PSG-ready CSV that instructs the code generation "
-        "system how many unique ActiveHub access codes to create for "
-        "each customer line item when migrating from Active Learn."
+        "Joins a customer extract against the ALS -> ActiveHub ISBN "
+        "mapping file, appending the matched AH ISBN and AH QTY to "
+        "each row for a visual check."
     ),
     version="0.1.0",
 )
@@ -81,7 +77,6 @@ async def index(request: Request) -> HTMLResponse:
         "index.html",
         {
             "max_upload_mb": MAX_UPLOAD_MB,
-            "allow_uk_default": ALLOW_UK_DEFAULT,
         },
     )
 
@@ -90,26 +85,18 @@ async def index(request: Request) -> HTMLResponse:
 async def run_pipeline(
     mapping: UploadFile = File(..., description="Mapping CSV (ALS -> AH)"),
     extract: UploadFile = File(..., description="Customer extract CSV"),
-    mode: str = Form("EstablishmentIntl"),
-    allow_uk: Optional[str] = Form(None),
-    strict: Optional[str] = Form(None),
 ):
-    """Run the utility against two uploaded CSVs and return a zip pack."""
-
-    if mode not in {"EstablishmentIntl", "D2C"}:
-        raise HTTPException(400, "mode must be 'EstablishmentIntl' or 'D2C'.")
-
-    allow_uk_bool = _checkbox(allow_uk) or ALLOW_UK_DEFAULT
-    strict_bool = _checkbox(strict)
+    """Join the two uploaded CSVs and return the resulting CSV."""
 
     ts = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
     log.info(
-        "Run start ts=%s mode=%s mapping=%s extract=%s allow_uk=%s strict=%s",
-        ts, mode, mapping.filename, extract.filename, allow_uk_bool, strict_bool,
+        "Run start ts=%s mapping=%s extract=%s",
+        ts, mapping.filename, extract.filename,
     )
 
-    with tempfile.TemporaryDirectory(prefix="als2ah_") as tmp:
-        tmp_path = Path(tmp)
+    tmp = tempfile.TemporaryDirectory(prefix="als2ah_")
+    try:
+        tmp_path = Path(tmp.name)
         in_dir = tmp_path / "in"
         out_dir = tmp_path / "out"
         in_dir.mkdir()
@@ -121,56 +108,40 @@ async def run_pipeline(
         _save_upload(mapping, mapping_path)
         _save_upload(extract, extract_path)
 
-        try:
-            result = als2ah_codegen.run(
-                mapping_path=str(mapping_path),
-                extract_path=str(extract_path),
-                mode=mode,
-                out_dir=str(out_dir),
-                allow_uk=allow_uk_bool,
-                strict=strict_bool,
-            )
-        except ValueError as exc:
-            log.warning("Validation error: %s", exc)
-            raise HTTPException(400, str(exc)) from exc
-        except Exception as exc:  # pragma: no cover - defensive
-            log.exception("Unhandled error during run")
-            raise HTTPException(500, f"Internal error: {exc}") from exc
-
-        stats = result.get("stats", {})
-        log.info(
-            "Run complete ts=%s output_rows=%s exceptions=%s total_qty=%s",
-            ts,
-            stats.get("output_rows"),
-            stats.get("exception_rows"),
-            stats.get("total_quantity"),
+        result = als2ah_codegen.run(
+            mapping_path=str(mapping_path),
+            extract_path=str(extract_path),
+            out_dir=str(out_dir),
         )
+    except ValueError as exc:
+        tmp.cleanup()
+        log.warning("Validation error: %s", exc)
+        raise HTTPException(400, str(exc)) from exc
+    except HTTPException:
+        tmp.cleanup()
+        raise
+    except Exception as exc:  # pragma: no cover - defensive
+        tmp.cleanup()
+        log.exception("Unhandled error during run")
+        raise HTTPException(500, f"Internal error: {exc}") from exc
 
-        # Build in-memory zip of the three artefacts
-        buf = io.BytesIO()
-        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-            for key in ("output_path", "exceptions_path", "summary_path"):
-                p = Path(result[key])
-                zf.write(p, arcname=p.name)
-        buf.seek(0)
+    log.info(
+        "Run complete ts=%s matched=%s total=%s",
+        ts, result["matched_rows"], result["total_rows"],
+    )
 
-        filename = f"AH_CodeGen_Pack_{ts}.zip"
-        return StreamingResponse(
-            buf,
-            media_type="application/zip",
-            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
-        )
+    output_path = Path(result["output_path"])
+    return FileResponse(
+        output_path,
+        media_type="text/csv",
+        filename=output_path.name,
+        background=BackgroundTask(tmp.cleanup),
+    )
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-def _checkbox(v: Optional[str]) -> bool:
-    if v is None:
-        return False
-    return str(v).lower() in {"1", "true", "on", "yes", "y"}
-
 
 def _save_upload(upload: UploadFile, dest: Path) -> None:
     """Stream an upload to disk while enforcing MAX_UPLOAD_BYTES."""

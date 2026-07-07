@@ -1,32 +1,31 @@
 # ALS &rarr; ActiveHub Code Generation Utility
 
-Prepares a PSG-ready CSV that instructs the code generation system how many
-unique ActiveHub (AH) access codes to create for each customer line item, when
-migrating international establishment (and D2C) customers from Active Learn
-Service (ALS) subscriptions to ActiveHub per-user licence codes.
+Joins a customer extract against the ALS &rarr; ActiveHub (AH) ISBN mapping
+file, so each line item shows which AH ISBN and AH QTY it corresponds to
+when migrating customers from Active Learn Service (ALS) subscriptions to
+ActiveHub per-user licence codes.
 
-> British English throughout. Source files are read-only; the utility produces
-> three artefacts per run: a request CSV, an exceptions CSV and a plain-text
-> summary with SHA256 hashes for audit.
+> British English throughout. Source files are read-only; the utility
+> produces a single output CSV per run.
 
 ---
 
 ## 1. Purpose
 
-Bridge the shift from a *subscription-per-establishment* model to a
-*unique-code-per-user-per-book* model. The utility joins a mapping file
-(ALS ISBN &rarr; AH ISBN/PPID/Title) against a customer extract and emits a
-PSG-ready request pack. It does **not** generate codes &mdash; PSG does that
-downstream.
+The utility takes the customer extract as its base &mdash; every column and
+every row is kept as-is &mdash; and extends it with the result of matching
+each row's `ISBN` against the mapping file's `ALS ISBN`. On a match, the
+mapping's `AH ISBN` and `AH QTY` are appended; unmatched rows are kept in
+the output with those columns left blank, so they stay visible for a visual
+check rather than being silently dropped.
 
 ## 2. Features
 
-- Mapping-driven join on normalised 13-digit ISBNs
-- Explicit `Quantity` per line (`NumberOfLicences` for establishments, `1` for D2C)
-- Exceptions file: every unmapped, ambiguous, or invalid row is captured with a reason
-- SHA256 hashes on inputs and outputs, timestamped run summary &mdash; audit-ready
-- BTEC International coverage check with a warning if none are found
-- UK-exclusion guard: refuses to process a UK-inclusive extract unless overridden
+- Mapping-driven join: extract `ISBN` &rarr; mapping `ALS ISBN`, both
+  normalised to 13-digit ISBNs before comparing
+- Every extract row is preserved in the output, matched or not
+- Appends `ALS_ISBN` (the normalised join key), `AH_ISBN` and `AH_QTY` as
+  new columns
 - FastAPI web UI plus a CLI mode
 
 ## 3. Architecture
@@ -38,9 +37,8 @@ downstream.
            \                        /
             \_______  als2ah  ____/
                     \ codegen /
-             +-------+-------+
-             |               |
-     request.csv     exceptions.csv     summary.txt
+                       |
+                  output.csv
 ```
 
 ## 4. Quick start (local)
@@ -62,8 +60,7 @@ uvicorn src.app:app --reload
 ```bash
 python -m src.als2ah_codegen \
     --mapping "path/to/Redeemed access code mapping ALS to AH(D2C 1 to 1).csv" \
-    --extract "path/to/PROD_Extracted_Establishment_School_Data(No  UK).csv" \
-    --mode EstablishmentIntl \
+    --extract "path/to/PROD_Extracted_Establishment_School_Data.csv" \
     --out-dir ./out
 ```
 
@@ -73,10 +70,7 @@ Parameters:
 | -------------- | ----------------------------------- | ------------------ |
 | `--mapping`    | path to mapping CSV                 | *(required)*       |
 | `--extract`    | path to customer extract CSV        | *(required)*       |
-| `--mode`       | `EstablishmentIntl` &#124; `D2C`    | `EstablishmentIntl`|
 | `--out-dir`    | output directory                    | `./out`            |
-| `--allow-uk`   | flag                                | off                |
-| `--strict`     | flag &mdash; non-zero exit on any exception | off        |
 
 ## 6. Deploying to Railway
 
@@ -89,14 +83,13 @@ Parameters:
 4. Wait for the first build (~90 seconds). The `/healthz` probe should turn green.
 5. Under **Settings &rarr; Networking**, click **Generate Domain** to obtain a public URL.
 6. Optional: add environment variables under **Variables** (see below).
-7. Open the URL, upload the two CSVs, and download the generated pack.
+7. Open the URL, upload the two CSVs, and download the joined CSV.
 
 ### Environment variables
 
 | Name                 | Purpose                                              | Default   |
 | -------------------- | ---------------------------------------------------- | --------- |
 | `MAX_UPLOAD_MB`      | Per-file upload cap                                  | `25`      |
-| `ALLOW_UK_DEFAULT`   | Pre-tick the &lsquo;Allow UK&rsquo; box in the UI    | `false`   |
 | `PORT`               | Injected by Railway automatically                    | *(auto)*  |
 | `RAILWAY_GIT_COMMIT_SHA` | Surfaced by `/version` endpoint if present        | `dev`     |
 
@@ -105,20 +98,21 @@ Parameters:
 - `GET /healthz` &rarr; `{"status":"ok"}` (used by Railway's healthcheck)
 - `GET /version` &rarr; version and Git SHA
 
-## 7. Output files
+## 7. Output file
 
-| File                                    | Description |
-| --------------------------------------- | ----------- |
-| `AH_CodeGen_Request_<mode>_<ts>.csv`    | The PSG-ready request &mdash; columns: `SI_No, SubID, SchoolName, VistaCode, SchoolType, PostCode, SubOwnerFirstName, SubOwnerLastName, SubOwnerEmail, ExpiryDate, ALS_ISBN, ALS_Description, AH_ISBN, AH_PPID, AH_Title, Quantity, Scenario, MappingStatus` |
-| `AH_CodeGen_Exceptions_<mode>_<ts>.csv` | Every rejected row with a `Reason` (Unmapped ALS ISBN, Ambiguous mapping, Invalid ISBN, Non-positive licences, Missing SubOwnerEmail) |
-| `AH_CodeGen_Summary_<mode>_<ts>.txt`    | Row counts, hashes, total quantity, BTEC coverage warning, top unmapped ISBNs |
+| File                              | Description |
+| ---------------------------------- | ----------- |
+| `AH_CodeGen_Output_<ts>.csv`      | The extract's original columns (`SI_No, ISBN, Description, ExpiryDate, SubOwnerFirstName, SubOwnerLastName, SubOwnerEmail, NumberOfLicences, SubID, SchoolName, VistaCode, SchoolType, PostCode`) plus `ALS_ISBN, AH_ISBN, AH_QTY` |
+
+Rows with no mapping match keep `ALS_ISBN` (the normalised extract ISBN)
+but leave `AH_ISBN` and `AH_QTY` blank.
 
 ## 8. Notes & caveats
 
-- **The utility does not generate access codes.** PSG receives the request pack and produces the codes; uniqueness is enforced there.
-- **UK establishments are out of scope** for this migration. The utility refuses to run against an extract whose filename lacks &lsquo;No UK&rsquo; unless `--allow-uk` / the UI checkbox is set. This is a guard, not a filter &mdash; per Claire's clarification, the correct input is the &lsquo;No UK&rsquo; extract.
-- **BTEC International** coverage is checked at the end of every run and warned on if zero rows are found (per Joanne's flag during the planning meeting).
-- **Auditability**: every run stamps SHA256 hashes on both inputs and both outputs, plus the run timestamp.
+- **The utility does not generate access codes** and does not decide how
+  many codes to request &mdash; it is a join/lookup step only.
+- Where the mapping file lists more than one AH ISBN for the same ALS
+  ISBN, the first occurrence in the mapping file is used.
 
 ## 9. License
 
