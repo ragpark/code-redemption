@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>ALS &rarr; ActiveHub Code Generation Utility</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+  <style>
+    body { background: #f7f7fa; }
+    .card { border: none; box-shadow: 0 2px 12px rgba(0,0,0,.06); }
+    .footer { font-size: .85rem; color: #666; }
+    code { background: #eef; padding: 0 .25rem; border-radius: .2rem; }
+  </style>
+</head>
+<body>
+<div class="container py-5" style="max-width: 780px;">
+  <h1 class="mb-2">ALS &rarr; ActiveHub Code Generation Utility</h1>
+  <p class="text-muted">
+    Prepares a PSG-ready CSV that instructs the code generation system how many
+    unique ActiveHub access codes to create for each customer line item, when
+    migrating international establishment (and D2C) customers from Active Learn
+    to ActiveHub. Source files are read-only; three artefacts are produced:
+    the request CSV, an exceptions CSV, and a run summary.
+  </p>
+
+  <div class="card p-4 my-4">
+    <form action="/run" method="post" enctype="multipart/form-data">
+      <div class="mb-3">
+        <label class="form-label"><strong>Mapping CSV</strong>
+          (ALS &rarr; AH mapping, e.g. <code>Redeemed access code mapping ...</code>)</label>
+        <input type="file" name="mapping" accept=".csv" class="form-control" required>
+      </div>
+
+      <div class="mb-3">
+        <label class="form-label"><strong>Customer extract CSV</strong>
+          (e.g. <code>PROD_Extracted_Establishment_School_Data(No UK).csv</code>)</label>
+        <input type="file" name="extract" accept=".csv" class="form-control" required>
+      </div>
+
+      <div class="mb-3">
+        <label class="form-label"><strong>Scenario</strong></label>
+        <select name="mode" class="form-select">
+          <option value="EstablishmentIntl" selected>EstablishmentIntl &mdash; one code per licensed user</option>
+          <option value="D2C">D2C &mdash; one code per line item</option>
+        </select>
+      </div>
+
+      <div class="form-check mb-2">
+        <input class="form-check-input" type="checkbox" name="allow_uk" value="true" id="allow_uk"
+          {% if allow_uk_default %}checked{% endif %}>
+        <label class="form-check-label" for="allow_uk">
+          Allow UK-inclusive extract (override the &lsquo;No UK&rsquo; filename check)
+        </label>
+      </div>
+
+      <div class="form-check mb-4">
+        <input class="form-check-input" type="checkbox" name="strict" value="true" id="strict">
+        <label class="form-check-label" for="strict">
+          Strict mode &mdash; fail the run if any exception rows are produced
+        </label>
+      </div>
+
+      <button type="submit" class="btn btn-primary">Run and download pack</button>
+      <small class="text-muted d-block mt-2">
+        Maximum upload size per file: {{ max_upload_mb }} MB.
+      </small>
+    </form>
+  </div>
+
+  <p class="footer">
+    British English &middot; Confidential &middot;
+    <a href="https://github.com/">Source repository</a>
+  </p>
+</div>
+</body>
+</html>
