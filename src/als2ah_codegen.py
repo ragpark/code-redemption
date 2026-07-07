@@ -74,17 +74,35 @@ def _timestamp() -> str:
 # Loaders
 # -----------------------------------------------------------------------------
 
+def _find_header_row(path: Path, marker: str = "ALS ISBN", max_scan: int = 10) -> int:
+    """Locate the header row by scanning for a known column name.
+
+    Some exports of the mapping file have a descriptive title on line 1
+    before the real header; others start directly with the header. Scan
+    the first few lines rather than assuming a fixed offset.
+    """
+    with path.open("r", encoding="utf-8-sig", newline="") as f:
+        for i, line in enumerate(f):
+            if marker in line:
+                return i
+            if i >= max_scan:
+                break
+    return 0
+
+
 def load_mapping(path: Path) -> Dict[str, dict]:
     """Load the ALS -> AH mapping file.
 
-    The file has a descriptive title on line 1 and the real header on
-    line 2. Returns a dict keyed by normalised ALS ISBN (Col C) with
-    the corresponding AH ISBN (Col E) and AH QTY (Col H). Where an ALS
-    ISBN appears more than once, the first occurrence wins.
+    Some exports have a descriptive title on line 1 before the real
+    header; the header row is located dynamically rather than assumed.
+    Returns a dict keyed by normalised ALS ISBN (Col C) with the
+    corresponding AH ISBN (Col E) and AH QTY (Col H). Where an ALS ISBN
+    appears more than once, the first occurrence wins.
     """
+    header_row = _find_header_row(path)
     df = pd.read_csv(
         path,
-        skiprows=1,          # skip the descriptive first row
+        skiprows=header_row,
         encoding="utf-8-sig",
         dtype=str,
         keep_default_na=False,

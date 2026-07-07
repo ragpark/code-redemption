@@ -50,6 +50,21 @@ def test_build_output_matches_and_keeps_unmatched(tmp_path):
     assert unmatched["AH_QTY"] == ""
 
 
+def test_build_output_mapping_without_title_row(tmp_path):
+    """Some mapping exports start directly with the header, no title row."""
+    mapping_path = tmp_path / "mapping.csv"
+    extract_path = tmp_path / "extract.csv"
+    mapping_path.write_text(
+        MAPPING_CSV.split("\n", 1)[1],  # drop the descriptive title row
+        encoding="utf-8",
+    )
+    extract_path.write_text(EXTRACT_CSV, encoding="utf-8")
+
+    result = als2ah_codegen.run(mapping_path, extract_path, tmp_path / "out")
+
+    assert result["matched_rows"] == 1
+
+
 def test_healthz_ok():
     r = client.get("/healthz")
     assert r.status_code == 200
