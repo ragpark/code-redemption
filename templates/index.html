@@ -30,10 +30,20 @@
         <input type="file" name="mapping" accept=".csv" class="form-control" required>
       </div>
 
-      <div class="mb-4">
+      <div class="mb-3">
         <label class="form-label"><strong>Customer extract CSV</strong>
           (e.g. <code>PROD_Extracted_Establishment_School_Data.csv</code>)</label>
         <input type="file" name="extract" accept=".csv" class="form-control" required>
+      </div>
+
+      <div class="form-check mb-4">
+        <input class="form-check-input" type="checkbox" name="one_to_many" value="true" id="one_to_many">
+        <label class="form-check-label" for="one_to_many">
+          1-to-many mapping file &mdash; the ALS ISBN maps to several AH ISBNs
+          (ALS ISBN is only populated on the first row of each group; a
+          matched extract row will be expanded into one output row per
+          AH ISBN)
+        </label>
       </div>
 
       <button type="submit" class="btn btn-primary">Run and download CSV</button>
