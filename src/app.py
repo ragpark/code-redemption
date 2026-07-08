@@ -17,8 +17,9 @@ import os
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Optional
 
-from fastapi import FastAPI, File, HTTPException, Request, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 from starlette.background import BackgroundTask
@@ -85,13 +86,16 @@ async def index(request: Request) -> HTMLResponse:
 async def run_pipeline(
     mapping: UploadFile = File(..., description="Mapping CSV (ALS -> AH)"),
     extract: UploadFile = File(..., description="Customer extract CSV"),
+    one_to_many: Optional[str] = Form(None),
 ):
     """Join the two uploaded CSVs and return the resulting CSV."""
 
+    mapping_type = "one_to_many" if _checkbox(one_to_many) else "one_to_one"
+
     ts = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
     log.info(
-        "Run start ts=%s mapping=%s extract=%s",
-        ts, mapping.filename, extract.filename,
+        "Run start ts=%s mapping=%s extract=%s mapping_type=%s",
+        ts, mapping.filename, extract.filename, mapping_type,
     )
 
     tmp = tempfile.TemporaryDirectory(prefix="als2ah_")
@@ -112,6 +116,7 @@ async def run_pipeline(
             mapping_path=str(mapping_path),
             extract_path=str(extract_path),
             out_dir=str(out_dir),
+            mapping_type=mapping_type,
         )
     except ValueError as exc:
         tmp.cleanup()
@@ -142,6 +147,12 @@ async def run_pipeline(
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+def _checkbox(v: Optional[str]) -> bool:
+    if v is None:
+        return False
+    return str(v).lower() in {"1", "true", "on", "yes", "y"}
+
 
 def _save_upload(upload: UploadFile, dest: Path) -> None:
     """Stream an upload to disk while enforcing MAX_UPLOAD_BYTES."""

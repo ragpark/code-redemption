@@ -17,6 +17,14 @@ normalised ALS ISBN used to make the match. Unmatched rows are kept in
 the output with the AH_ISBN / AH_QTY columns left blank, so every
 extract row remains visible for a visual check.
 
+Two mapping file layouts are supported:
+  - "one_to_one" (default): each ALS ISBN maps to a single AH ISBN.
+  - "one_to_many": each ALS ISBN maps to several AH ISBNs. The ALS ISBN
+    / ALS title are only populated on the first row of a group; the
+    following rows (blank ALS ISBN) add further AH ISBNs to that same
+    group. A matched extract row is exploded into one output row per
+    AH ISBN in its group.
+
 British English throughout.
 """
 
@@ -26,9 +34,10 @@ import argparse
 import csv
 import re
 import sys
+from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict
+from typing import Dict, List
 
 import pandas as pd
 
@@ -44,6 +53,8 @@ EXTRACT_COLUMNS = [
 ]
 
 OUTPUT_COLUMNS = EXTRACT_COLUMNS + ["ALS_ISBN", "AH_ISBN", "AH_QTY"]
+
+MAPPING_TYPES = ("one_to_one", "one_to_many")
 
 
 # -----------------------------------------------------------------------------
@@ -128,6 +139,51 @@ def load_mapping(path: Path) -> Dict[str, dict]:
     return mapping
 
 
+def load_mapping_many(path: Path) -> Dict[str, List[dict]]:
+    """Load a 1-to-many ALS -> AH mapping file.
+
+    Same columns as the 1-to-1 mapping, but ALS ISBN is only populated
+    on the first row of each group; subsequent rows (blank ALS ISBN)
+    add further AH ISBNs to that same group -- forward-fill the ALS
+    ISBN down through the blanks to reconstruct the grouping. Returns a
+    dict keyed by normalised ALS ISBN, mapping to an ordered list of
+    {AH_ISBN, AH_QTY} entries (mapping-file order preserved).
+    """
+    header_row = _find_header_row(path)
+    df = pd.read_csv(
+        path,
+        skiprows=header_row,
+        encoding="utf-8-sig",
+        dtype=str,
+        keep_default_na=False,
+    )
+
+    wanted = ["ALS ISBN", "AH ISBN", "AH QTY"]
+    missing = [c for c in wanted if c not in df.columns]
+    if missing:
+        raise ValueError(
+            f"Mapping file missing expected columns: {missing}. "
+            f"Got: {list(df.columns)}"
+        )
+
+    mapping: Dict[str, List[dict]] = defaultdict(list)
+    current_isbn = ""
+    for row in df[wanted].to_dict(orient="records"):
+        raw_isbn = _clean_text(row["ALS ISBN"])
+        if raw_isbn:
+            current_isbn = _normalise_isbn(raw_isbn)
+
+        ah_isbn = _normalise_isbn(row["AH ISBN"])
+        if not current_isbn or not ah_isbn:
+            continue
+
+        mapping[current_isbn].append({
+            "AH_ISBN": ah_isbn,
+            "AH_QTY": _clean_text(row["AH QTY"]),
+        })
+    return dict(mapping)
+
+
 def load_extract(path: Path) -> pd.DataFrame:
     """Load the customer extract, unchanged aside from whitespace cleanup."""
     df = pd.read_csv(
@@ -168,6 +224,35 @@ def build_output(extract_df: pd.DataFrame, mapping: Dict[str, dict]) -> pd.DataF
     return pd.DataFrame(rows, columns=OUTPUT_COLUMNS)
 
 
+def build_output_many(extract_df: pd.DataFrame, mapping: Dict[str, List[dict]]) -> pd.DataFrame:
+    """Join the extract against a 1-to-many mapping and return the output.
+
+    A matched extract row is exploded into one output row per AH ISBN
+    in its ALS ISBN's group; an unmatched row is kept once with
+    AH_ISBN / AH_QTY left blank, same as the 1-to-1 join.
+    """
+    rows = []
+    for row in extract_df.to_dict(orient="records"):
+        als_isbn = _normalise_isbn(row["ISBN"])
+        matches = mapping.get(als_isbn)
+        if matches:
+            for m in matches:
+                rows.append({
+                    **row,
+                    "ALS_ISBN": als_isbn,
+                    "AH_ISBN": m["AH_ISBN"],
+                    "AH_QTY": m["AH_QTY"],
+                })
+        else:
+            rows.append({
+                **row,
+                "ALS_ISBN": als_isbn,
+                "AH_ISBN": "",
+                "AH_QTY": "",
+            })
+    return pd.DataFrame(rows, columns=OUTPUT_COLUMNS)
+
+
 # -----------------------------------------------------------------------------
 # Writers
 # -----------------------------------------------------------------------------
@@ -189,15 +274,23 @@ def run(
     mapping_path: str | Path,
     extract_path: str | Path,
     out_dir: str | Path = "./out",
+    mapping_type: str = "one_to_one",
 ) -> dict:
+    if mapping_type not in MAPPING_TYPES:
+        raise ValueError(f"mapping_type must be one of {MAPPING_TYPES}")
+
     mapping_path = Path(mapping_path)
     extract_path = Path(extract_path)
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    mapping = load_mapping(mapping_path)
     extract_df = load_extract(extract_path)
-    out_df = build_output(extract_df, mapping)
+    if mapping_type == "one_to_many":
+        mapping_many = load_mapping_many(mapping_path)
+        out_df = build_output_many(extract_df, mapping_many)
+    else:
+        mapping_one = load_mapping(mapping_path)
+        out_df = build_output(extract_df, mapping_one)
 
     matched = int((out_df["AH_ISBN"] != "").sum())
 
@@ -217,8 +310,9 @@ def _cli() -> None:
     p.add_argument("--mapping", required=True)
     p.add_argument("--extract", required=True)
     p.add_argument("--out-dir", default="./out")
+    p.add_argument("--mapping-type", choices=MAPPING_TYPES, default="one_to_one")
     args = p.parse_args()
-    result = run(args.mapping, args.extract, args.out_dir)
+    result = run(args.mapping, args.extract, args.out_dir, args.mapping_type)
     print(f"OK  Output : {result['output_path']}")
     print(f"    Matched {result['matched_rows']} of {result['total_rows']} rows")
 
