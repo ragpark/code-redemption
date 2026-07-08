@@ -60,11 +60,13 @@ def test_build_output_matches_and_keeps_unmatched(tmp_path):
     matched = out_df[out_df["ISBN"] == "9781292103273"].iloc[0]
     assert matched["ALS_ISBN"] == "9781292103273"
     assert matched["AH_ISBN"] == "9781292999999"
+    assert matched["AH_Title"] == "Some AH Title"
     assert matched["AH_QTY"] == "1"
 
     unmatched = out_df[out_df["ISBN"] == "9780000000000"].iloc[0]
     assert unmatched["ALS_ISBN"] == "9780000000000"
     assert unmatched["AH_ISBN"] == ""
+    assert unmatched["AH_Title"] == ""
     assert unmatched["AH_QTY"] == ""
 
 
@@ -100,12 +102,16 @@ def test_build_output_many_explodes_matches_and_keeps_unmatched(tmp_path):
     assert set(matched_rows["AH_ISBN"]) == {
         "9781292763569", "9781292495897", "9781292763576",
     }
+    assert set(matched_rows["AH_Title"]) == {
+        "Core Book 1", "Core Book 2", "Core Book 3",
+    }
     assert set(matched_rows["AH_QTY"]) == {"3000"}
     assert all(matched_rows["ALS_ISBN"] == "9781292319728")
 
     unmatched_rows = out_df[out_df["SI_No"] == "2"]
     assert len(unmatched_rows) == 1
     assert unmatched_rows.iloc[0]["AH_ISBN"] == ""
+    assert unmatched_rows.iloc[0]["AH_Title"] == ""
     assert unmatched_rows.iloc[0]["AH_QTY"] == ""
 
     assert result["total_rows"] == 4  # 3 exploded + 1 unmatched

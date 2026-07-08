@@ -15,17 +15,17 @@ ActiveHub per-user licence codes.
 The utility takes the customer extract as its base &mdash; every column and
 every row is kept as-is &mdash; and extends it with the result of matching
 each row's `ISBN` against the mapping file's `ALS ISBN`. On a match, the
-mapping's `AH ISBN` and `AH QTY` are appended; unmatched rows are kept in
-the output with those columns left blank, so they stay visible for a visual
-check rather than being silently dropped.
+mapping's `AH ISBN`, `AH Title` and `AH QTY` are appended; unmatched rows
+are kept in the output with those columns left blank, so they stay visible
+for a visual check rather than being silently dropped.
 
 ## 2. Features
 
 - Mapping-driven join: extract `ISBN` &rarr; mapping `ALS ISBN`, both
   normalised to 13-digit ISBNs before comparing
 - Every extract row is preserved in the output, matched or not
-- Appends `ALS_ISBN` (the normalised join key), `AH_ISBN` and `AH_QTY` as
-  new columns
+- Appends `ALS_ISBN` (the normalised join key), `AH_ISBN`, `AH_Title` and
+  `AH_QTY` as new columns
 - Two mapping file layouts:
   - **1-to-1** (default): each ALS ISBN maps to a single AH ISBN
   - **1-to-many**: each ALS ISBN maps to several AH ISBNs (ALS ISBN is
@@ -118,13 +118,13 @@ Parameters:
 
 | File                              | Description |
 | ---------------------------------- | ----------- |
-| `AH_CodeGen_Output_<ts>.csv`      | The extract's original columns (`SI_No, ISBN, Description, ExpiryDate, SubOwnerFirstName, SubOwnerLastName, SubOwnerEmail, NumberOfLicences, SubID, SchoolName, VistaCode, SchoolType, PostCode`) plus `ALS_ISBN, AH_ISBN, AH_QTY` |
+| `AH_CodeGen_Output_<ts>.csv`      | The extract's original columns (`SI_No, ISBN, Description, ExpiryDate, SubOwnerFirstName, SubOwnerLastName, SubOwnerEmail, NumberOfLicences, SubID, SchoolName, VistaCode, SchoolType, PostCode`) plus `ALS_ISBN, AH_ISBN, AH_Title, AH_QTY` |
 
 Rows with no mapping match keep `ALS_ISBN` (the normalised extract ISBN)
-but leave `AH_ISBN` and `AH_QTY` blank. With the 1-to-many mapping type, a
-matched extract row appears once per AH ISBN in its group (all sharing the
-same `SI_No` and other extract columns), so `SI_No` is no longer unique in
-the output.
+but leave `AH_ISBN`, `AH_Title` and `AH_QTY` blank. With the 1-to-many
+mapping type, a matched extract row appears once per AH ISBN in its group
+(all sharing the same `SI_No` and other extract columns), so `SI_No` is no
+longer unique in the output.
 
 ## 8. Notes & caveats
 
