@@ -11,11 +11,12 @@ Reads two CSV sources:
   2. A mapping file (ALS ISBN -> AH ISBN / AH QTY).
 
 For each extract row, the ISBN (Col B) is matched against the mapping's
-ALS ISBN (Col C). On a match, the AH ISBN (Col E) and AH QTY (Col H)
-from the mapping file are appended as extra columns, alongside the
-normalised ALS ISBN used to make the match. Unmatched rows are kept in
-the output with the AH_ISBN / AH_QTY columns left blank, so every
-extract row remains visible for a visual check.
+ALS ISBN (Col C). On a match, the AH ISBN (Col E), AH Title (Col G) and
+AH QTY (Col H) from the mapping file are appended as extra columns,
+alongside the normalised ALS ISBN used to make the match. Unmatched
+rows are kept in the output with the AH_ISBN / AH_Title / AH_QTY
+columns left blank, so every extract row remains visible for a visual
+check.
 
 Two mapping file layouts are supported:
   - "one_to_one" (default): each ALS ISBN maps to a single AH ISBN.
@@ -52,7 +53,7 @@ EXTRACT_COLUMNS = [
     "VistaCode", "SchoolType", "PostCode",
 ]
 
-OUTPUT_COLUMNS = EXTRACT_COLUMNS + ["ALS_ISBN", "AH_ISBN", "AH_QTY"]
+OUTPUT_COLUMNS = EXTRACT_COLUMNS + ["ALS_ISBN", "AH_ISBN", "AH_Title", "AH_QTY"]
 
 MAPPING_TYPES = ("one_to_one", "one_to_many")
 
@@ -107,8 +108,8 @@ def load_mapping(path: Path) -> Dict[str, dict]:
     Some exports have a descriptive title on line 1 before the real
     header; the header row is located dynamically rather than assumed.
     Returns a dict keyed by normalised ALS ISBN (Col C) with the
-    corresponding AH ISBN (Col E) and AH QTY (Col H). Where an ALS ISBN
-    appears more than once, the first occurrence wins.
+    corresponding AH ISBN (Col E), AH Title (Col G) and AH QTY (Col H).
+    Where an ALS ISBN appears more than once, the first occurrence wins.
     """
     header_row = _find_header_row(path)
     df = pd.read_csv(
@@ -119,7 +120,7 @@ def load_mapping(path: Path) -> Dict[str, dict]:
         keep_default_na=False,
     )
 
-    wanted = ["ALS ISBN", "AH ISBN", "AH QTY"]
+    wanted = ["ALS ISBN", "AH ISBN", "AH Title", "AH QTY"]
     missing = [c for c in wanted if c not in df.columns]
     if missing:
         raise ValueError(
@@ -134,6 +135,7 @@ def load_mapping(path: Path) -> Dict[str, dict]:
             continue
         mapping[isbn] = {
             "AH_ISBN": _clean_text(row["AH ISBN"]),
+            "AH_Title": _clean_text(row["AH Title"]),
             "AH_QTY": _clean_text(row["AH QTY"]),
         }
     return mapping
@@ -147,7 +149,7 @@ def load_mapping_many(path: Path) -> Dict[str, List[dict]]:
     add further AH ISBNs to that same group -- forward-fill the ALS
     ISBN down through the blanks to reconstruct the grouping. Returns a
     dict keyed by normalised ALS ISBN, mapping to an ordered list of
-    {AH_ISBN, AH_QTY} entries (mapping-file order preserved).
+    {AH_ISBN, AH_Title, AH_QTY} entries (mapping-file order preserved).
     """
     header_row = _find_header_row(path)
     df = pd.read_csv(
@@ -158,7 +160,7 @@ def load_mapping_many(path: Path) -> Dict[str, List[dict]]:
         keep_default_na=False,
     )
 
-    wanted = ["ALS ISBN", "AH ISBN", "AH QTY"]
+    wanted = ["ALS ISBN", "AH ISBN", "AH Title", "AH QTY"]
     missing = [c for c in wanted if c not in df.columns]
     if missing:
         raise ValueError(
@@ -179,6 +181,7 @@ def load_mapping_many(path: Path) -> Dict[str, List[dict]]:
 
         mapping[current_isbn].append({
             "AH_ISBN": ah_isbn,
+            "AH_Title": _clean_text(row["AH Title"]),
             "AH_QTY": _clean_text(row["AH QTY"]),
         })
     return dict(mapping)
@@ -219,6 +222,7 @@ def build_output(extract_df: pd.DataFrame, mapping: Dict[str, dict]) -> pd.DataF
             **row,
             "ALS_ISBN": als_isbn,
             "AH_ISBN": match["AH_ISBN"] if match else "",
+            "AH_Title": match["AH_Title"] if match else "",
             "AH_QTY": match["AH_QTY"] if match else "",
         })
     return pd.DataFrame(rows, columns=OUTPUT_COLUMNS)
@@ -241,6 +245,7 @@ def build_output_many(extract_df: pd.DataFrame, mapping: Dict[str, List[dict]]) 
                     **row,
                     "ALS_ISBN": als_isbn,
                     "AH_ISBN": m["AH_ISBN"],
+                    "AH_Title": m["AH_Title"],
                     "AH_QTY": m["AH_QTY"],
                 })
         else:
@@ -248,6 +253,7 @@ def build_output_many(extract_df: pd.DataFrame, mapping: Dict[str, List[dict]]) 
                 **row,
                 "ALS_ISBN": als_isbn,
                 "AH_ISBN": "",
+                "AH_Title": "",
                 "AH_QTY": "",
             })
     return pd.DataFrame(rows, columns=OUTPUT_COLUMNS)
