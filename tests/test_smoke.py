@@ -41,6 +41,19 @@ EXTRACT_MANY_CSV = (
 )
 
 
+D2C_EXTRACT_CSV = (
+    "ISBN,Description,AccessCodes,RedemmedDate,ExpiryDate,FirstName,LastName,"
+    "Email,UserName,UserType,LastLogin,UserStatus,SchID,SchoolName,VistaCode,"
+    "SchoolType,PostCode\n"
+    "9781292103273,Matched Book,9CD7A63C-4432-459B-BCD0-54EF9B8B9F5,02/10/2023,"
+    "01/10/2026,Diya,Dijo,d.dijo@example.com,d.dijo.bsg,Student,21/01/2024,"
+    "Active,693568,Diya Dijo,,D2C,\n"
+    "9780000000000,Unmatched Book,9DA205E4-3FA0-47FB-B7D2-967870879A8,"
+    "16/10/2023,15/10/2026,Tom,Matthews,thomasamatt4@gmail.com,"
+    "thomasamatt4@gmail.com,Student,,Active,698122,Tom Matthews,,D2C,\n"
+)
+
+
 def test_module_has_run():
     assert callable(getattr(als2ah_codegen, "run", None))
 
@@ -137,6 +150,81 @@ def test_run_pipeline_one_to_many_toggle(tmp_path):
     body = r.content.decode("utf-8-sig")
     # header + 3 exploded rows for SI_No 1 + 1 unmatched row for SI_No 2
     assert len(body.strip().splitlines()) == 5
+
+
+def test_build_output_d2c_extract_type(tmp_path):
+    """D2C extract has a different column layout (one row per customer)."""
+    mapping_path = tmp_path / "mapping.csv"
+    extract_path = tmp_path / "extract.csv"
+    mapping_path.write_text(MAPPING_CSV, encoding="utf-8")
+    extract_path.write_text(D2C_EXTRACT_CSV, encoding="utf-8")
+
+    result = als2ah_codegen.run(
+        mapping_path, extract_path, tmp_path / "out", extract_type="d2c",
+    )
+
+    assert result["total_rows"] == 2  # one output row per customer, unchanged
+    assert result["matched_rows"] == 1
+
+    out_df = result["output_df"]
+    assert list(out_df.columns) == als2ah_codegen.D2C_EXTRACT_COLUMNS + [
+        "ALS_ISBN", "AH_ISBN", "AH_Title", "AH_QTY",
+    ]
+
+    matched = out_df[out_df["ISBN"] == "9781292103273"].iloc[0]
+    assert matched["FirstName"] == "Diya"
+    assert matched["ALS_ISBN"] == "9781292103273"
+    assert matched["AH_ISBN"] == "9781292999999"
+    assert matched["AH_Title"] == "Some AH Title"
+    assert matched["AH_QTY"] == "1"
+
+    unmatched = out_df[out_df["ISBN"] == "9780000000000"].iloc[0]
+    assert unmatched["AH_ISBN"] == ""
+
+
+def test_load_extract_d2c_scientific_notation_isbn_does_not_falsely_match(tmp_path):
+    """Excel often renders long ISBNs as scientific notation on export.
+
+    If that happens the digits are unrecoverable, so the row should be
+    left unmatched (blank AH columns) rather than silently mismatched.
+    """
+    mapping_path = tmp_path / "mapping.csv"
+    extract_path = tmp_path / "extract.csv"
+    mapping_path.write_text(MAPPING_CSV, encoding="utf-8")
+    extract_path.write_text(
+        D2C_EXTRACT_CSV.replace("9781292103273", "9.78129E+12"),
+        encoding="utf-8",
+    )
+
+    result = als2ah_codegen.run(
+        mapping_path, extract_path, tmp_path / "out", extract_type="d2c",
+    )
+
+    out_df = result["output_df"]
+    row = out_df[out_df["ISBN"] == "9.78129E+12"].iloc[0]
+    assert row["ALS_ISBN"] == ""
+    assert row["AH_ISBN"] == ""
+
+
+def test_run_pipeline_d2c_extract_type_toggle(tmp_path):
+    mapping_path = tmp_path / "mapping.csv"
+    extract_path = tmp_path / "extract.csv"
+    mapping_path.write_bytes(MAPPING_CSV.encode("utf-8"))
+    extract_path.write_bytes(D2C_EXTRACT_CSV.encode("utf-8"))
+
+    with mapping_path.open("rb") as m, extract_path.open("rb") as e:
+        r = client.post(
+            "/run",
+            files={
+                "mapping": ("mapping.csv", m, "text/csv"),
+                "extract": ("extract.csv", e, "text/csv"),
+            },
+            data={"extract_type": "d2c"},
+        )
+    assert r.status_code == 200
+    body = r.content.decode("utf-8-sig")
+    assert body.splitlines()[0].startswith("ISBN,Description,AccessCodes")
+    assert len(body.strip().splitlines()) == 3  # header + 2 customer rows
 
 
 def test_healthz_ok():
