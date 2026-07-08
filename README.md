@@ -31,6 +31,11 @@ for a visual check rather than being silently dropped.
   - **1-to-many**: each ALS ISBN maps to several AH ISBNs (ALS ISBN is
     only populated on the first row of a group); a matched extract row
     is expanded into one output row per AH ISBN in its group
+- Two extract layouts:
+  - **establishment** (default): the `PROD_Extracted_Establishment_School`
+    export, ISBN in Col B
+  - **d2c**: the direct-to-consumer redeemed-access-code export (one row
+    per customer/access code), ISBN in Col A
 - FastAPI web UI plus a CLI mode
 
 ## 3. Architecture
@@ -79,6 +84,16 @@ python -m src.als2ah_codegen \
     --out-dir ./out
 ```
 
+For a D2C redeemed-access-code extract, add `--extract-type d2c`:
+
+```bash
+python -m src.als2ah_codegen \
+    --mapping "path/to/Redeemed access code mapping ALS to AH(D2C 1 to 1).csv" \
+    --extract "path/to/D2C_Redeemed_Access_Codes.csv" \
+    --extract-type d2c \
+    --out-dir ./out
+```
+
 Parameters:
 
 | Flag              | Values                              | Default            |
@@ -87,6 +102,7 @@ Parameters:
 | `--extract`       | path to customer extract CSV        | *(required)*       |
 | `--out-dir`       | output directory                    | `./out`            |
 | `--mapping-type`  | `one_to_one` &#124; `one_to_many`   | `one_to_one`       |
+| `--extract-type`  | `establishment` &#124; `d2c`        | `establishment`    |
 
 ## 6. Deploying to Railway
 
@@ -118,13 +134,21 @@ Parameters:
 
 | File                              | Description |
 | ---------------------------------- | ----------- |
-| `AH_CodeGen_Output_<ts>.csv`      | The extract's original columns (`SI_No, ISBN, Description, ExpiryDate, SubOwnerFirstName, SubOwnerLastName, SubOwnerEmail, NumberOfLicences, SubID, SchoolName, VistaCode, SchoolType, PostCode`) plus `ALS_ISBN, AH_ISBN, AH_Title, AH_QTY` |
+| `AH_CodeGen_Output_<ts>.csv`      | The extract's original columns plus `ALS_ISBN, AH_ISBN, AH_Title, AH_QTY` |
+
+The extract's original columns depend on `--extract-type`:
+
+- **establishment**: `SI_No, ISBN, Description, ExpiryDate, SubOwnerFirstName, SubOwnerLastName, SubOwnerEmail, NumberOfLicences, SubID, SchoolName, VistaCode, SchoolType, PostCode`
+- **d2c**: `ISBN, Description, AccessCodes, RedemmedDate, ExpiryDate, FirstName, LastName, Email, UserName, UserType, LastLogin, UserStatus, SchID, SchoolName, VistaCode, SchoolType, PostCode`
+
+Either way there is one output row per extract row (per customer, for the
+D2C layout), matched or not.
 
 Rows with no mapping match keep `ALS_ISBN` (the normalised extract ISBN)
 but leave `AH_ISBN`, `AH_Title` and `AH_QTY` blank. With the 1-to-many
 mapping type, a matched extract row appears once per AH ISBN in its group
-(all sharing the same `SI_No` and other extract columns), so `SI_No` is no
-longer unique in the output.
+(all sharing the same extract columns), so the extract's own row identifier
+is no longer unique in the output.
 
 ## 8. Notes & caveats
 
@@ -134,6 +158,13 @@ longer unique in the output.
   than one AH ISBN for the same ALS ISBN, the first occurrence in the
   mapping file is used. Use the 1-to-many mapping type instead if the
   mapping file is genuinely one ALS ISBN to several AH ISBNs.
+- **D2C ISBN column in scientific notation**: if the D2C extract is saved
+  from Excel with the ISBN column not formatted as text, long ISBNs can be
+  truncated to scientific notation (e.g. `9.78129E+12`). The original
+  digits are unrecoverable once that happens, so those rows will not match
+  anything and will come through with blank `AH_ISBN` / `AH_Title` /
+  `AH_QTY`. Re-export the source file with the ISBN column formatted as
+  text if this happens.
 
 ## 9. License
 

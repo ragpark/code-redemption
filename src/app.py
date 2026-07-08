@@ -87,15 +87,18 @@ async def run_pipeline(
     mapping: UploadFile = File(..., description="Mapping CSV (ALS -> AH)"),
     extract: UploadFile = File(..., description="Customer extract CSV"),
     one_to_many: Optional[str] = Form(None),
+    extract_type: str = Form("establishment"),
 ):
     """Join the two uploaded CSVs and return the resulting CSV."""
 
     mapping_type = "one_to_many" if _checkbox(one_to_many) else "one_to_one"
+    if extract_type not in als2ah_codegen.EXTRACT_TYPES:
+        raise HTTPException(400, "extract_type must be 'establishment' or 'd2c'.")
 
     ts = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
     log.info(
-        "Run start ts=%s mapping=%s extract=%s mapping_type=%s",
-        ts, mapping.filename, extract.filename, mapping_type,
+        "Run start ts=%s mapping=%s extract=%s mapping_type=%s extract_type=%s",
+        ts, mapping.filename, extract.filename, mapping_type, extract_type,
     )
 
     tmp = tempfile.TemporaryDirectory(prefix="als2ah_")
@@ -117,6 +120,7 @@ async def run_pipeline(
             extract_path=str(extract_path),
             out_dir=str(out_dir),
             mapping_type=mapping_type,
+            extract_type=extract_type,
         )
     except ValueError as exc:
         tmp.cleanup()

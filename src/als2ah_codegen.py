@@ -5,18 +5,24 @@ als2ah_codegen.py
 ALS -> ActiveHub ISBN join utility.
 
 Reads two CSV sources:
-  1. Customer extract (e.g. PROD_Extracted_Establishment_School_Data...).
-     This is the base design for the output -- its columns are passed
-     through unchanged.
-  2. A mapping file (ALS ISBN -> AH ISBN / AH QTY).
+  1. Customer extract. Two layouts are supported (see "extract_type"
+     below). This is the base design for the output -- its columns are
+     passed through unchanged.
+  2. A mapping file (ALS ISBN -> AH ISBN / AH Title / AH QTY).
 
-For each extract row, the ISBN (Col B) is matched against the mapping's
-ALS ISBN (Col C). On a match, the AH ISBN (Col E), AH Title (Col G) and
-AH QTY (Col H) from the mapping file are appended as extra columns,
-alongside the normalised ALS ISBN used to make the match. Unmatched
-rows are kept in the output with the AH_ISBN / AH_Title / AH_QTY
-columns left blank, so every extract row remains visible for a visual
-check.
+For each extract row, the ISBN is matched against the mapping's ALS
+ISBN. On a match, the AH ISBN, AH Title and AH QTY from the mapping
+file are appended as extra columns, alongside the normalised ALS ISBN
+used to make the match. Unmatched rows are kept in the output with the
+AH_ISBN / AH_Title / AH_QTY columns left blank, so every extract row
+remains visible for a visual check -- one output row per extract row
+(or, for a 1-to-many mapping, one output row per matched AH ISBN).
+
+Two extract layouts are supported:
+  - "establishment" (default): the PROD_Extracted_Establishment_School
+    export, keyed on ISBN (Col B).
+  - "d2c": the direct-to-consumer redeemed-access-code export (one row
+    per customer/access code), keyed on ISBN (Col A).
 
 Two mapping file layouts are supported:
   - "one_to_one" (default): each ALS ISBN maps to a single AH ISBN.
@@ -53,9 +59,17 @@ EXTRACT_COLUMNS = [
     "VistaCode", "SchoolType", "PostCode",
 ]
 
-OUTPUT_COLUMNS = EXTRACT_COLUMNS + ["ALS_ISBN", "AH_ISBN", "AH_Title", "AH_QTY"]
+D2C_EXTRACT_COLUMNS = [
+    "ISBN", "Description", "AccessCodes", "RedemmedDate", "ExpiryDate",
+    "FirstName", "LastName", "Email", "UserName", "UserType",
+    "LastLogin", "UserStatus", "SchID", "SchoolName",
+    "VistaCode", "SchoolType", "PostCode",
+]
+
+EXTRA_COLUMNS = ["ALS_ISBN", "AH_ISBN", "AH_Title", "AH_QTY"]
 
 MAPPING_TYPES = ("one_to_one", "one_to_many")
+EXTRACT_TYPES = ("establishment", "d2c")
 
 
 # -----------------------------------------------------------------------------
@@ -187,25 +201,40 @@ def load_mapping_many(path: Path) -> Dict[str, List[dict]]:
     return dict(mapping)
 
 
-def load_extract(path: Path) -> pd.DataFrame:
-    """Load the customer extract, unchanged aside from whitespace cleanup."""
+def _load_extract(path: Path, columns: List[str]) -> pd.DataFrame:
+    """Load a customer extract, unchanged aside from whitespace cleanup."""
     df = pd.read_csv(
         path,
         encoding="utf-8-sig",
         dtype=str,
         keep_default_na=False,
     )
-    missing = [c for c in EXTRACT_COLUMNS if c not in df.columns]
+    missing = [c for c in columns if c not in df.columns]
     if missing:
         raise ValueError(
             f"Extract file missing expected columns: {missing}. "
             f"Got: {list(df.columns)}"
         )
 
-    df = df[EXTRACT_COLUMNS].copy()
+    df = df[columns].copy()
     for c in df.columns:
         df[c] = df[c].map(_clean_text)
     return df
+
+
+def load_extract(path: Path) -> pd.DataFrame:
+    """Load the establishment customer extract (ISBN in Col B)."""
+    return _load_extract(path, EXTRACT_COLUMNS)
+
+
+def load_extract_d2c(path: Path) -> pd.DataFrame:
+    """Load the D2C redeemed-access-code extract (ISBN in Col A).
+
+    One row per customer/access code rather than per subscription line;
+    the join and output logic are otherwise identical to the
+    establishment extract.
+    """
+    return _load_extract(path, D2C_EXTRACT_COLUMNS)
 
 
 # -----------------------------------------------------------------------------
@@ -225,7 +254,7 @@ def build_output(extract_df: pd.DataFrame, mapping: Dict[str, dict]) -> pd.DataF
             "AH_Title": match["AH_Title"] if match else "",
             "AH_QTY": match["AH_QTY"] if match else "",
         })
-    return pd.DataFrame(rows, columns=OUTPUT_COLUMNS)
+    return pd.DataFrame(rows, columns=list(extract_df.columns) + EXTRA_COLUMNS)
 
 
 def build_output_many(extract_df: pd.DataFrame, mapping: Dict[str, List[dict]]) -> pd.DataFrame:
@@ -256,7 +285,7 @@ def build_output_many(extract_df: pd.DataFrame, mapping: Dict[str, List[dict]]) 
                 "AH_Title": "",
                 "AH_QTY": "",
             })
-    return pd.DataFrame(rows, columns=OUTPUT_COLUMNS)
+    return pd.DataFrame(rows, columns=list(extract_df.columns) + EXTRA_COLUMNS)
 
 
 # -----------------------------------------------------------------------------
@@ -281,16 +310,22 @@ def run(
     extract_path: str | Path,
     out_dir: str | Path = "./out",
     mapping_type: str = "one_to_one",
+    extract_type: str = "establishment",
 ) -> dict:
     if mapping_type not in MAPPING_TYPES:
         raise ValueError(f"mapping_type must be one of {MAPPING_TYPES}")
+    if extract_type not in EXTRACT_TYPES:
+        raise ValueError(f"extract_type must be one of {EXTRACT_TYPES}")
 
     mapping_path = Path(mapping_path)
     extract_path = Path(extract_path)
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    extract_df = load_extract(extract_path)
+    extract_df = (
+        load_extract_d2c(extract_path) if extract_type == "d2c"
+        else load_extract(extract_path)
+    )
     if mapping_type == "one_to_many":
         mapping_many = load_mapping_many(mapping_path)
         out_df = build_output_many(extract_df, mapping_many)
@@ -317,8 +352,12 @@ def _cli() -> None:
     p.add_argument("--extract", required=True)
     p.add_argument("--out-dir", default="./out")
     p.add_argument("--mapping-type", choices=MAPPING_TYPES, default="one_to_one")
+    p.add_argument("--extract-type", choices=EXTRACT_TYPES, default="establishment")
     args = p.parse_args()
-    result = run(args.mapping, args.extract, args.out_dir, args.mapping_type)
+    result = run(
+        args.mapping, args.extract, args.out_dir,
+        args.mapping_type, args.extract_type,
+    )
     print(f"OK  Output : {result['output_path']}")
     print(f"    Matched {result['matched_rows']} of {result['total_rows']} rows")
 

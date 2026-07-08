@@ -32,8 +32,17 @@
 
       <div class="mb-3">
         <label class="form-label"><strong>Customer extract CSV</strong>
-          (e.g. <code>PROD_Extracted_Establishment_School_Data.csv</code>)</label>
+          (e.g. <code>PROD_Extracted_Establishment_School_Data.csv</code> or a
+          D2C redeemed-access-code export)</label>
         <input type="file" name="extract" accept=".csv" class="form-control" required>
+      </div>
+
+      <div class="mb-3">
+        <label class="form-label"><strong>Extract type</strong></label>
+        <select name="extract_type" class="form-select">
+          <option value="establishment" selected>Establishment &mdash; PROD_Extracted_Establishment_School_Data layout (one row per subscription line, ISBN in Col B)</option>
+          <option value="d2c">D2C &mdash; redeemed access code export (one row per customer/access code, ISBN in Col A)</option>
+        </select>
       </div>
 
       <div class="form-check mb-4">
