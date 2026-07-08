@@ -105,7 +105,7 @@ Parameters:
 
 | Name                 | Purpose                                              | Default   |
 | -------------------- | ---------------------------------------------------- | --------- |
-| `MAX_UPLOAD_MB`      | Per-file upload cap                                  | `25`      |
+| `MAX_UPLOAD_MB`      | Per-file upload cap                                  | `200`     |
 | `PORT`               | Injected by Railway automatically                    | *(auto)*  |
 | `RAILWAY_GIT_COMMIT_SHA` | Surfaced by `/version` endpoint if present        | `dev`     |
 

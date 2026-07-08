@@ -30,7 +30,7 @@ from src import als2ah_codegen
 # Configuration
 # ---------------------------------------------------------------------------
 
-MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "25"))
+MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "200"))
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
 
 logging.basicConfig(
